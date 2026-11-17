@@ -809,7 +809,8 @@ WindowImplX11::~WindowImplX11()
 
     // Remove this window from the global list of windows (required for focus request)
     const std::lock_guard lock(allWindowsMutex);
-    allWindows.erase(std::find(allWindows.begin(), allWindows.end(), this));
+    if (const auto it = std::find(allWindows.begin(), allWindows.end(), this); it != allWindows.end())
+        allWindows.erase(it);
 
     // Set window group IDs on all existing windows, lock must be held
     setWindowGroupIds();

@@ -399,6 +399,19 @@ endif()
 # add an option for building the test suite
 sfml_set_option(SFML_BUILD_TEST_SUITE OFF BOOL "ON to build the SFML test suite, OFF to ignore it")
 
+# add an option for building the stress tests
+sfml_set_option(SFML_BUILD_STRESS_TESTS OFF BOOL "ON to build the SFML stress tests, OFF to ignore them")
+
+if(SFML_BUILD_STRESS_TESTS)
+    enable_testing()
+
+    if(SFML_BUILD_WINDOW AND SFML_BUILD_GRAPHICS)
+        add_subdirectory(test/stress)
+    else()
+        message(WARNING "Cannot build stress tests unless the Window and Graphics modules are enabled")
+    endif()
+endif()
+
 # add an option for enabling coverage reporting
 sfml_set_option(SFML_ENABLE_COVERAGE OFF BOOL "ON to enable coverage reporting, OFF to ignore it")
 
