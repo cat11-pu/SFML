@@ -7,6 +7,8 @@ set(SRC
     ${INCROOT}/AudioResource.hpp
     ${SRCROOT}/AudioDevice.cpp
     ${SRCROOT}/AudioDevice.hpp
+    ${SRCROOT}/CrossfadeMusic.cpp
+    ${INCROOT}/CrossfadeMusic.hpp
     ${INCROOT}/Export.hpp
     ${SRCROOT}/Listener.cpp
     ${INCROOT}/Listener.hpp

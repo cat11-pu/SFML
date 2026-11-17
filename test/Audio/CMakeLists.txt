@@ -1,5 +1,6 @@
 set(AUDIO_SRC
     AudioResource.test.cpp
+    CrossfadeMusic.test.cpp
     InputSoundFile.test.cpp
     Listener.test.cpp
     Music.test.cpp
@@ -34,4 +35,3 @@ if(SFML_OS_IOS)
     target_sources(test-sfml-audio PRIVATE ${AUDIO_RESOURCE})
     set_source_files_properties(${AUDIO_RESOURCE} PROPERTIES MACOSX_PACKAGE_LOCATION "Audio")
 endif()
-

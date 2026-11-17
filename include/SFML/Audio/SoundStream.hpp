@@ -172,6 +172,25 @@ public:
     void setPlayingOffset(Time timeOffset);
 
     ////////////////////////////////////////////////////////////
+    /// \brief Change the current playing position of the stream, in frames
+    ///
+    /// Unlike `setPlayingOffset(Time)`, this overload does not
+    /// convert the position through a floating-point time value.
+    /// This makes it possible to address an exact sample frame.
+    ///
+    /// The playing position can be changed when the stream is
+    /// either paused or playing. Changing the playing position
+    /// when the stream is stopped has no effect, since playing
+    /// the stream would reset its position.
+    ///
+    /// \param frameOffset New playing position, in sample frames
+    ///
+    /// \see `setPlayingOffset`, `getPlayingOffsetFrames`
+    ///
+    ////////////////////////////////////////////////////////////
+    void setPlayingOffsetFrames(std::uint64_t frameOffset);
+
+    ////////////////////////////////////////////////////////////
     /// \brief Get the current playing position of the stream
     ///
     /// \return Current playing position, from the beginning of the stream
@@ -180,6 +199,19 @@ public:
     ///
     ////////////////////////////////////////////////////////////
     [[nodiscard]] Time getPlayingOffset() const;
+
+    ////////////////////////////////////////////////////////////
+    /// \brief Get the current playing position of the stream, in frames
+    ///
+    /// The position is expressed in sample frames. A frame contains
+    /// one sample for each channel.
+    ///
+    /// \return Current playing position, in sample frames
+    ///
+    /// \see `getPlayingOffset`, `setPlayingOffsetFrames`
+    ///
+    ////////////////////////////////////////////////////////////
+    [[nodiscard]] std::uint64_t getPlayingOffsetFrames() const;
 
     ////////////////////////////////////////////////////////////
     /// \brief Set whether or not the stream should loop after reaching the end
@@ -272,6 +304,22 @@ protected:
     ///
     ////////////////////////////////////////////////////////////
     virtual void onSeek(Time timeOffset) = 0;
+
+    ////////////////////////////////////////////////////////////
+    /// \brief Change the current playing position in the stream source, in frames
+    ///
+    /// This function is called by the stream when an exact frame
+    /// position is requested. It is also called internally when a
+    /// time-based seek is converted to frames.
+    ///
+    /// The default implementation converts the frame position to
+    /// `sf::Time` and calls `onSeek(Time)`. Derived classes that
+    /// support sample-accurate seeking can override this function.
+    ///
+    /// \param frameOffset New playing position, in sample frames
+    ///
+    ////////////////////////////////////////////////////////////
+    virtual void onSeekToFrame(std::uint64_t frameOffset);
 
     ////////////////////////////////////////////////////////////
     /// \brief Change the current playing position in the stream source to the beginning of the loop

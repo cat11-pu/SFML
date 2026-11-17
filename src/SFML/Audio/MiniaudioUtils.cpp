@@ -34,6 +34,7 @@
 
 #include <miniaudio.h>
 
+#include <algorithm>
 #include <ostream>
 
 #include <cassert>
@@ -402,7 +403,10 @@ std::uint64_t MiniaudioUtils::getFrameIndex(ma_sound& sound, Time timeOffset)
         result != MA_SUCCESS)
         err() << "Failed to get sound data format: " << ma_result_description(result) << std::endl;
 
-    const auto frameIndex = static_cast<std::uint64_t>(timeOffset.asSeconds() * static_cast<float>(sampleRate));
+    const auto microseconds = std::max<std::int64_t>(timeOffset.asMicroseconds(), 0);
+    const auto secondsPart  = static_cast<std::uint64_t>(microseconds) / 1'000'000;
+    const auto remainder    = static_cast<std::uint64_t>(microseconds) % 1'000'000;
+    const auto frameIndex   = secondsPart * sampleRate + (remainder * sampleRate + 500'000) / 1'000'000;
 
     if (const ma_result result = ma_sound_seek_to_pcm_frame(&sound, frameIndex); result != MA_SUCCESS)
         err() << "Failed to seek sound to pcm frame: " << ma_result_description(result) << std::endl;

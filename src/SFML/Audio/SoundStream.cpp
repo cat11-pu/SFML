@@ -35,6 +35,7 @@
 #include <miniaudio.h>
 
 #include <algorithm>
+#include <atomic>
 #include <ostream>
 #include <vector>
 
@@ -157,14 +158,9 @@ struct SoundStream::Impl : priv::MiniaudioUtils::SoundBase
         impl.sampleBufferCursor = 0;
         impl.samplesProcessed   = frameIndex * impl.channelCount;
 
-        if (impl.sampleRate != 0)
-        {
-            owner->onSeek(seconds(static_cast<float>(frameIndex) / static_cast<float>(impl.sampleRate)));
-        }
-        else
-        {
-            owner->onSeek(Time::Zero);
-        }
+        if (!impl.frameSeekApplied.exchange(false, std::memory_order_acq_rel) ||
+            impl.frameSeekTarget.load(std::memory_order_acquire) != frameIndex)
+            owner->onSeekToFrame(frameIndex);
 
         return MA_SUCCESS;
     }
@@ -221,6 +217,8 @@ struct SoundStream::Impl : priv::MiniaudioUtils::SoundBase
     std::vector<SoundChannel> channelMap;           //!< The map of position in sample frame to sound channel
     bool                      loop{};               //!< Loop flag (`true` to loop, `false` to play once)
     bool                      streaming{true};      //!< `true` if we are still streaming samples from the source
+    std::atomic<bool>          frameSeekApplied{}; //!< `true` if a frame seek has already been applied by the caller
+    std::atomic<std::uint64_t> frameSeekTarget{};  //!< Frame of the last seek applied by the caller
 };
 
 
@@ -352,17 +350,40 @@ void SoundStream::setPlayingOffset(Time timeOffset)
     if (m_impl->sampleRate == 0)
         return;
 
-    if (m_impl->sound.pDataSource == nullptr || m_impl->sound.engineNode.pEngine == nullptr)
+    const auto microseconds = std::max<std::int64_t>(timeOffset.asMicroseconds(), 0);
+    const auto secondsPart  = static_cast<std::uint64_t>(microseconds) / 1'000'000;
+    const auto remainder    = static_cast<std::uint64_t>(microseconds) % 1'000'000;
+    const auto frameIndex   = secondsPart * m_impl->sampleRate +
+                              (remainder * m_impl->sampleRate + 500'000) / 1'000'000;
+
+    setPlayingOffsetFrames(frameIndex);
+}
+
+
+////////////////////////////////////////////////////////////
+void SoundStream::setPlayingOffsetFrames(std::uint64_t frameOffset)
+{
+    if (m_impl->sampleRate == 0)
         return;
 
-    const auto frameIndex = priv::MiniaudioUtils::getFrameIndex(m_impl->sound, timeOffset);
+    if (m_impl->sound.pDataSource == nullptr || m_impl->sound.engineNode.pEngine == nullptr)
+        return;
 
     m_impl->streaming = true;
     m_impl->sampleBuffer.clear();
     m_impl->sampleBufferCursor = 0;
-    m_impl->samplesProcessed   = frameIndex * m_impl->channelCount;
+    m_impl->samplesProcessed   = frameOffset * m_impl->channelCount;
+    m_impl->frameSeekTarget.store(frameOffset, std::memory_order_release);
+    m_impl->frameSeekApplied.store(true, std::memory_order_release);
 
-    onSeek(seconds(static_cast<float>(frameIndex) / static_cast<float>(m_impl->sampleRate)));
+    if (const ma_result result = ma_sound_seek_to_pcm_frame(&m_impl->sound, frameOffset); result != MA_SUCCESS)
+    {
+        m_impl->frameSeekApplied.store(false, std::memory_order_release);
+        err() << "Failed to seek sound to pcm frame: " << ma_result_description(result) << std::endl;
+        return;
+    }
+
+    onSeekToFrame(frameOffset);
 }
 
 
@@ -373,6 +394,25 @@ Time SoundStream::getPlayingOffset() const
         return {};
 
     return priv::MiniaudioUtils::getPlayingOffset(m_impl->sound);
+}
+
+
+////////////////////////////////////////////////////////////
+std::uint64_t SoundStream::getPlayingOffsetFrames() const
+{
+    if (m_impl->channelCount == 0 || m_impl->sampleRate == 0)
+        return 0;
+
+    std::uint64_t frameOffset = 0;
+
+    if (const ma_result result = ma_sound_get_cursor_in_pcm_frames(&m_impl->sound, &frameOffset);
+        result != MA_SUCCESS)
+    {
+        err() << "Failed to get sound cursor: " << ma_result_description(result) << std::endl;
+        return 0;
+    }
+
+    return frameOffset;
 }
 
 
@@ -395,6 +435,24 @@ void SoundStream::setEffectProcessor(EffectProcessor effectProcessor)
 {
     m_impl->effectProcessor = std::move(effectProcessor);
     m_impl->connectEffect(bool{m_impl->effectProcessor});
+}
+
+
+////////////////////////////////////////////////////////////
+void SoundStream::onSeekToFrame(std::uint64_t frameOffset)
+{
+    if (m_impl->sampleRate == 0)
+    {
+        onSeek(Time::Zero);
+        return;
+    }
+
+    const std::uint64_t secondsPart      = frameOffset / m_impl->sampleRate;
+    const std::uint64_t remainder        = frameOffset % m_impl->sampleRate;
+    const auto          microsecondCount = secondsPart * 1'000'000 +
+                                           remainder * 1'000'000 / m_impl->sampleRate;
+
+    onSeek(microseconds(static_cast<std::int64_t>(microsecondCount)));
 }
 
 

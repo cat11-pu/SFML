@@ -28,6 +28,7 @@
 // Headers
 ////////////////////////////////////////////////////////////
 
+#include <SFML/Audio/CrossfadeMusic.hpp>
 #include <SFML/Audio/InputSoundFile.hpp>
 #include <SFML/Audio/Listener.hpp>
 #include <SFML/Audio/Music.hpp>
