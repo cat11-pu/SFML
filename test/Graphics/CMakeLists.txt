@@ -6,6 +6,7 @@ set(GRAPHICS_SRC
     ConvexShape.test.cpp
     CoordinateType.test.cpp
     Drawable.test.cpp
+    DrawRegion.test.cpp
     Font.test.cpp
     Glsl.test.cpp
     Glyph.test.cpp

@@ -198,6 +198,48 @@ std::uint32_t stencilFunctionToGlConstant(sf::StencilComparison comparison)
 namespace sf
 {
 ////////////////////////////////////////////////////////////
+class RenderTarget::RegionGuard
+{
+public:
+    RegionGuard(RenderTarget& target, const IntRect& region) : m_target(target), m_previous(target.m_activeRegion)
+    {
+        if (m_previous)
+        {
+            m_target.m_activeRegion = m_previous->findIntersection(region).value_or(IntRect{{0, 0}, {0, 0}});
+        }
+        else
+        {
+            m_target.m_activeRegion = region;
+        }
+    }
+
+    RegionGuard(const RegionGuard&)            = delete;
+    RegionGuard& operator=(const RegionGuard&) = delete;
+
+    ~RegionGuard()
+    {
+        if (!m_target.m_regionScissorApplied)
+            return;
+
+        m_target.m_activeRegion = m_previous;
+        if (m_previous)
+        {
+            m_target.applyActiveScissor();
+        }
+        else
+        {
+            m_target.applyCurrentScissor();
+            m_target.m_regionScissorApplied = false;
+        }
+    }
+
+private:
+    RenderTarget&          m_target;
+    std::optional<IntRect> m_previous;
+};
+
+
+////////////////////////////////////////////////////////////
 void RenderTarget::clear(Color color)
 {
     if (RenderTargetImpl::isActive(m_id) || setActive(true))
@@ -371,6 +413,12 @@ void RenderTarget::draw(const Vertex* vertices, std::size_t vertexCount, Primiti
 
         setupDraw(useVertexCache, states);
 
+        if (m_activeRegion)
+        {
+            applyActiveScissor();
+            m_regionScissorApplied = true;
+        }
+
         // Check if texture coordinates array is needed, and update client state accordingly
         const bool enableTexCoordsArray = (states.texture || states.shader);
         if (!m_cache.enable || (enableTexCoordsArray != m_cache.texCoordsArrayEnabled))
@@ -446,6 +494,12 @@ void RenderTarget::draw(const VertexBuffer& vertexBuffer, std::size_t firstVerte
     {
         setupDraw(false, states);
 
+        if (m_activeRegion)
+        {
+            applyActiveScissor();
+            m_regionScissorApplied = true;
+        }
+
         // Bind vertex buffer
         VertexBuffer::bind(&vertexBuffer);
 
@@ -468,6 +522,54 @@ void RenderTarget::draw(const VertexBuffer& vertexBuffer, std::size_t firstVerte
         m_cache.useVertexCache        = false;
         m_cache.texCoordsArrayEnabled = true;
     }
+}
+
+
+////////////////////////////////////////////////////////////
+void RenderTarget::drawRegion(const Drawable& drawable, const IntRect& region, const RenderStates& states)
+{
+    if (!getClippedRegion(region))
+        return;
+
+    const RegionGuard guard(*this, region);
+    drawable.draw(*this, states);
+}
+
+
+////////////////////////////////////////////////////////////
+void RenderTarget::drawRegion(const Vertex*       vertices,
+                              std::size_t         vertexCount,
+                              PrimitiveType       type,
+                              const IntRect&      region,
+                              const RenderStates& states)
+{
+    if (!getClippedRegion(region))
+        return;
+
+    const RegionGuard guard(*this, region);
+    draw(vertices, vertexCount, type, states);
+}
+
+
+////////////////////////////////////////////////////////////
+void RenderTarget::drawRegion(const VertexBuffer& vertexBuffer, const IntRect& region, const RenderStates& states)
+{
+    drawRegion(vertexBuffer, 0, vertexBuffer.getVertexCount(), region, states);
+}
+
+
+////////////////////////////////////////////////////////////
+void RenderTarget::drawRegion(const VertexBuffer& vertexBuffer,
+                              std::size_t         firstVertex,
+                              std::size_t         vertexCount,
+                              const IntRect&      region,
+                              const RenderStates& states)
+{
+    if (!getClippedRegion(region))
+        return;
+
+    const RegionGuard guard(*this, region);
+    draw(vertexBuffer, firstVertex, vertexCount, states);
 }
 
 
@@ -663,6 +765,53 @@ void RenderTarget::applyCurrentView()
     glCheck(glViewport(viewport.position.x, viewportTop, viewport.size.x, viewport.size.y));
 
     // Set the scissor rectangle and enable/disable scissor testing
+    applyCurrentScissor();
+
+    // Set the projection matrix
+    glCheck(glMatrixMode(GL_PROJECTION));
+    glCheck(glLoadMatrixf(m_view.getTransform().getMatrix()));
+
+    // Go back to model-view mode
+    glCheck(glMatrixMode(GL_MODELVIEW));
+
+    m_cache.viewChanged = false;
+}
+
+
+////////////////////////////////////////////////////////////
+std::optional<IntRect> RenderTarget::getClippedRegion(IntRect region) const
+{
+    const auto [width, height] = getSize();
+    const IntRect targetBounds({0, 0}, {static_cast<int>(width), static_cast<int>(height)});
+
+    auto clipped = region.findIntersection(targetBounds);
+    if (!clipped)
+        return std::nullopt;
+
+    if (m_view.getScissor() != FloatRect({0, 0}, {1, 1}))
+        clipped = clipped->findIntersection(getScissor(m_view));
+
+    return clipped;
+}
+
+
+////////////////////////////////////////////////////////////
+void RenderTarget::applyScissor(const IntRect& scissor)
+{
+    const int scissorTop = static_cast<int>(getSize().y) - (scissor.position.y + scissor.size.y);
+    glCheck(glScissor(scissor.position.x, scissorTop, scissor.size.x, scissor.size.y));
+
+    if (!m_cache.enable || !m_cache.scissorEnabled)
+    {
+        glCheck(glEnable(GL_SCISSOR_TEST));
+        m_cache.scissorEnabled = true;
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+void RenderTarget::applyCurrentScissor()
+{
     if (m_view.getScissor() == FloatRect({0, 0}, {1, 1}))
     {
         if (!m_cache.enable || m_cache.scissorEnabled)
@@ -673,25 +822,29 @@ void RenderTarget::applyCurrentView()
     }
     else
     {
-        const IntRect pixelScissor = getScissor(m_view);
-        const int     scissorTop   = static_cast<int>(getSize().y) - (pixelScissor.position.y + pixelScissor.size.y);
-        glCheck(glScissor(pixelScissor.position.x, scissorTop, pixelScissor.size.x, pixelScissor.size.y));
+        applyScissor(getScissor(m_view));
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+void RenderTarget::applyActiveScissor()
+{
+    const auto clipped = getClippedRegion(*m_activeRegion);
+    if (!clipped)
+    {
+        glCheck(glScissor(0, 0, 0, 0));
 
         if (!m_cache.enable || !m_cache.scissorEnabled)
         {
             glCheck(glEnable(GL_SCISSOR_TEST));
             m_cache.scissorEnabled = true;
         }
+
+        return;
     }
 
-    // Set the projection matrix
-    glCheck(glMatrixMode(GL_PROJECTION));
-    glCheck(glLoadMatrixf(m_view.getTransform().getMatrix()));
-
-    // Go back to model-view mode
-    glCheck(glMatrixMode(GL_MODELVIEW));
-
-    m_cache.viewChanged = false;
+    applyScissor(*clipped);
 }
 
 

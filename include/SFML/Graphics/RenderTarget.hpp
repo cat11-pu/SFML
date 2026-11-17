@@ -45,6 +45,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 
 namespace sf
@@ -345,6 +346,85 @@ public:
               const RenderStates& states = RenderStates::Default);
 
     ////////////////////////////////////////////////////////////
+    /// \brief Draw a drawable into a region of the render target
+    ///
+    /// Only pixels inside `region` can be modified. The region is
+    /// expressed in target pixel coordinates with a top-left origin,
+    /// independent of the current view. It is intersected with the
+    /// target bounds and the current view's scissor rectangle before
+    /// drawing. Negative region sizes are normalized in the same way
+    /// as `sf::Rect::findIntersection`.
+    ///
+    /// Pixels inside the effective region are the same as if the
+    /// drawable had been drawn without a region and the result had
+    /// then been cropped to that region. Pixels outside it are left
+    /// untouched. If the effective region is empty, nothing is drawn.
+    ///
+    /// The render states, including blending and shaders, are applied
+    /// exactly as in `draw`.
+    ///
+    /// \param drawable Object to draw
+    /// \param region   Pixel rectangle to update
+    /// \param states   Render states to use for drawing
+    ///
+    /// \see `draw`
+    ///
+    ////////////////////////////////////////////////////////////
+    void drawRegion(const Drawable&     drawable,
+                    const IntRect&      region,
+                    const RenderStates& states = RenderStates::Default);
+
+    ////////////////////////////////////////////////////////////
+    /// \brief Draw primitives into a region of the render target
+    ///
+    /// \param vertices    Pointer to the vertices
+    /// \param vertexCount Number of vertices in the array
+    /// \param type        Type of primitives to draw
+    /// \param region      Pixel rectangle to update
+    /// \param states      Render states to use for drawing
+    ///
+    /// \see `drawRegion(const Drawable&, const IntRect&, const RenderStates&)`
+    ///
+    ////////////////////////////////////////////////////////////
+    void drawRegion(const Vertex*       vertices,
+                    std::size_t         vertexCount,
+                    PrimitiveType       type,
+                    const IntRect&      region,
+                    const RenderStates& states = RenderStates::Default);
+
+    ////////////////////////////////////////////////////////////
+    /// \brief Draw a vertex buffer into a region of the render target
+    ///
+    /// \param vertexBuffer Vertex buffer
+    /// \param region       Pixel rectangle to update
+    /// \param states       Render states to use for drawing
+    ///
+    /// \see `drawRegion(const Drawable&, const IntRect&, const RenderStates&)`
+    ///
+    ////////////////////////////////////////////////////////////
+    void drawRegion(const VertexBuffer& vertexBuffer,
+                    const IntRect&      region,
+                    const RenderStates& states = RenderStates::Default);
+
+    ////////////////////////////////////////////////////////////
+    /// \brief Draw a vertex buffer into a region of the render target
+    ///
+    /// \param vertexBuffer Vertex buffer
+    /// \param firstVertex  Index of the first vertex to render
+    /// \param vertexCount  Number of vertices to render
+    /// \param region       Pixel rectangle to update
+    /// \param states       Render states to use for drawing
+    ///
+    /// \see `drawRegion(const Drawable&, const IntRect&, const RenderStates&)`
+    ///
+    ////////////////////////////////////////////////////////////
+    void drawRegion(const VertexBuffer& vertexBuffer,
+                    std::size_t         firstVertex,
+                    std::size_t         vertexCount,
+                    const IntRect&      region,
+                    const RenderStates& states = RenderStates::Default);
+
+    ////////////////////////////////////////////////////////////
     /// \brief Return the size of the rendering region of the target
     ///
     /// \return Size in pixels
@@ -468,6 +548,42 @@ protected:
 
 private:
     ////////////////////////////////////////////////////////////
+    /// \brief Guard that temporarily installs a draw region
+    ///
+    ////////////////////////////////////////////////////////////
+    class RegionGuard;
+
+    ////////////////////////////////////////////////////////////
+    /// \brief Get the intersection of a region, the target and the view scissor
+    ///
+    /// \param region Region in target pixel coordinates
+    ///
+    /// \return Effective region if not empty
+    ///
+    ////////////////////////////////////////////////////////////
+    [[nodiscard]] std::optional<IntRect> getClippedRegion(IntRect region) const;
+
+    ////////////////////////////////////////////////////////////
+    /// \brief Apply a scissor rectangle in target pixel coordinates
+    ///
+    /// \param scissor Scissor rectangle
+    ///
+    ////////////////////////////////////////////////////////////
+    void applyScissor(const IntRect& scissor);
+
+    ////////////////////////////////////////////////////////////
+    /// \brief Apply the current view's scissor rectangle
+    ///
+    ////////////////////////////////////////////////////////////
+    void applyCurrentScissor();
+
+    ////////////////////////////////////////////////////////////
+    /// \brief Apply the active draw region's scissor rectangle
+    ///
+    ////////////////////////////////////////////////////////////
+    void applyActiveScissor();
+
+    ////////////////////////////////////////////////////////////
     /// \brief Apply the current view
     ///
     ////////////////////////////////////////////////////////////
@@ -568,6 +684,8 @@ private:
     View          m_view;        //!< Current view
     StatesCache   m_cache{};     //!< Render states cache
     std::uint64_t m_id{};        //!< Unique number that identifies the RenderTarget
+    std::optional<IntRect> m_activeRegion;           //!< Region currently limiting draws
+    bool                   m_regionScissorApplied{}; //!< Was the region scissor applied to GL?
 };
 
 } // namespace sf
