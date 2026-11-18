@@ -151,6 +151,15 @@ public:
     using Window::setIcon;
 
     ////////////////////////////////////////////////////////////
+    /// \brief Display what has been rendered to the window so far
+    ///
+    /// This function flushes any pending batched geometry and then
+    /// swaps the front and back buffers, like `sf::Window::display()`.
+    ///
+    ////////////////////////////////////////////////////////////
+    void display();
+
+    ////////////////////////////////////////////////////////////
     /// \brief Tell if the window will use sRGB encoding when drawing on it
     ///
     /// You can request sRGB encoding for a window by having the sRgbCapable flag set in the `ContextSettings`

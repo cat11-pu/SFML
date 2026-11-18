@@ -75,6 +75,16 @@ void RenderWindow::setIcon(const Image& icon)
 
 
 ////////////////////////////////////////////////////////////
+void RenderWindow::display()
+{
+    // Submit any pending batched geometry before swapping the buffers
+    flushBatch();
+
+    Window::display();
+}
+
+
+////////////////////////////////////////////////////////////
 bool RenderWindow::isSrgb() const
 {
     return getSettings().sRgbCapable;

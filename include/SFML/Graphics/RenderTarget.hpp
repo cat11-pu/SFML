@@ -42,6 +42,7 @@
 #include <SFML/System/Vector2.hpp>
 
 #include <array>
+#include <vector>
 
 #include <cstddef>
 #include <cstdint>
@@ -466,6 +467,25 @@ protected:
     ////////////////////////////////////////////////////////////
     void initialize();
 
+    ////////////////////////////////////////////////////////////
+    /// \brief Flush all pending batched primitives
+    ///
+    /// Consecutive draws of points, lines, triangles and triangle
+    /// strips that share compatible render states (same texture,
+    /// blend mode, stencil mode and coordinate type, no shader)
+    /// are merged into a single draw call by an internal batch.
+    /// This function forces the pending batch, if any, to be drawn.
+    ///
+    /// The batch is flushed automatically whenever necessary to
+    /// preserve rendering order (state change, view change, clear,
+    /// `display()`, ...), so calling this function is never required
+    /// for correctness. It is provided for derived classes that
+    /// need to guarantee all pending geometry has been submitted,
+    /// e.g. before reading back or swapping the framebuffer.
+    ///
+    ////////////////////////////////////////////////////////////
+    void flushBatch();
+
 private:
     ////////////////////////////////////////////////////////////
     /// \brief Apply the current view
@@ -542,6 +562,21 @@ private:
     void cleanupDraw(const RenderStates& states);
 
     ////////////////////////////////////////////////////////////
+    /// \brief Append primitives to the current draw batch
+    ///
+    /// Vertices are pre-transformed on the CPU and appended to the
+    /// reused batch buffer. If the given states are not compatible
+    /// with the pending batch, the batch is flushed first.
+    ///
+    /// \param vertices    Pointer to the vertices to append
+    /// \param vertexCount Number of vertices in the array
+    /// \param type        Type of primitives to append
+    /// \param states      Render states to use for drawing
+    ///
+    ////////////////////////////////////////////////////////////
+    void appendToBatch(const Vertex* vertices, std::size_t vertexCount, PrimitiveType type, const RenderStates& states);
+
+    ////////////////////////////////////////////////////////////
     /// \brief Render states cache
     ///
     ////////////////////////////////////////////////////////////
@@ -562,11 +597,23 @@ private:
     };
 
     ////////////////////////////////////////////////////////////
+    /// \brief Draw batch state
+    ///
+    ////////////////////////////////////////////////////////////
+    struct BatchState
+    {
+        std::vector<Vertex> vertices;                       //!< Reused pre-transformed vertex buffer
+        RenderStates        states;                         //!< States shared by the whole batch
+        PrimitiveType       type{PrimitiveType::Triangles}; //!< Primitive type of the whole batch
+    };
+
+    ////////////////////////////////////////////////////////////
     // Member data
     ////////////////////////////////////////////////////////////
     View          m_defaultView; //!< Default view
     View          m_view;        //!< Current view
     StatesCache   m_cache{};     //!< Render states cache
+    BatchState    m_batch;       //!< Pending draw batch
     std::uint64_t m_id{};        //!< Unique number that identifies the RenderTarget
 };
 

@@ -46,10 +46,84 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 
 
 namespace
 {
+// A nested named namespace is used here to allow unity builds of SFML.
+namespace RenderTargetBatch
+{
+// Maximum number of vertices held by a single batch before it is flushed
+constexpr std::size_t maxBatchVertices = 1 << 20;
+
+// Batching can be disabled at runtime for benchmarking and debugging
+bool batchingEnabled()
+{
+    static const bool enabled = []
+    {
+        const char* value = std::getenv("SFML_DISABLE_VERTEX_BATCHING");
+        return !value || (*value != '1');
+    }();
+    return enabled;
+}
+
+// Optional draw call statistics, printed at exit when SFML_BATCH_STATS=1
+struct Stats
+{
+    std::uint64_t drawCalls{};
+    std::uint64_t verticesDrawn{};
+    std::uint64_t batchesFlushed{};
+    std::uint64_t verticesBatched{};
+};
+
+Stats& stats()
+{
+    static Stats instance;
+    return instance;
+}
+
+void printStatsAtExit()
+{
+    const Stats& s = stats();
+    sf::err() << "[SFML batch stats] draw calls: " << s.drawCalls << ", vertices drawn: " << s.verticesDrawn
+              << ", batches flushed: " << s.batchesFlushed << ", vertices batched: " << s.verticesBatched << std::endl;
+}
+
+bool statsEnabled()
+{
+    static const bool enabled = []
+    {
+        const char* value = std::getenv("SFML_BATCH_STATS");
+        if (value && (*value == '1'))
+        {
+            std::atexit(printStatsAtExit);
+            return true;
+        }
+        return false;
+    }();
+    return enabled;
+}
+
+void recordDraw(std::size_t vertexCount)
+{
+    if (statsEnabled())
+    {
+        ++stats().drawCalls;
+        stats().verticesDrawn += vertexCount;
+    }
+}
+
+void recordFlush(std::size_t vertexCount)
+{
+    if (statsEnabled())
+    {
+        ++stats().batchesFlushed;
+        stats().verticesBatched += vertexCount;
+    }
+}
+} // namespace RenderTargetBatch
+
 // A nested named namespace is used here to allow unity builds of SFML.
 namespace RenderTargetImpl
 {
@@ -200,6 +274,9 @@ namespace sf
 ////////////////////////////////////////////////////////////
 void RenderTarget::clear(Color color)
 {
+    // Flush pending batched geometry so that it is not erased by the clear
+    flushBatch();
+
     if (RenderTargetImpl::isActive(m_id) || setActive(true))
     {
         // Unbind texture to fix RenderTexture preventing clear
@@ -218,6 +295,9 @@ void RenderTarget::clear(Color color)
 ////////////////////////////////////////////////////////////
 void RenderTarget::clearStencil(StencilValue stencilValue)
 {
+    // Flush pending batched geometry so that it is not erased by the clear
+    flushBatch();
+
     if (RenderTargetImpl::isActive(m_id) || setActive(true))
     {
         // Unbind texture to fix RenderTexture preventing clear
@@ -236,6 +316,9 @@ void RenderTarget::clearStencil(StencilValue stencilValue)
 ////////////////////////////////////////////////////////////
 void RenderTarget::clear(Color color, StencilValue stencilValue)
 {
+    // Flush pending batched geometry so that it is not erased by the clear
+    flushBatch();
+
     if (RenderTargetImpl::isActive(m_id) || setActive(true))
     {
         // Unbind texture to fix RenderTexture preventing clear
@@ -255,6 +338,9 @@ void RenderTarget::clear(Color color, StencilValue stencilValue)
 ////////////////////////////////////////////////////////////
 void RenderTarget::setView(const View& view)
 {
+    // The pending batch was built for the previous view, draw it before it changes
+    flushBatch();
+
     m_view              = view;
     m_cache.viewChanged = true;
 }
@@ -352,6 +438,20 @@ void RenderTarget::draw(const Vertex* vertices, std::size_t vertexCount, Primiti
     if (!vertices || (vertexCount == 0))
         return;
 
+    // Mergeable primitives with shader-less states and a regular texture are
+    // accumulated into the batch instead of being drawn immediately
+    const bool fboTexture = states.texture && states.texture->m_fboAttachment;
+    const bool mergeable  = (type == PrimitiveType::Points) || (type == PrimitiveType::Lines) ||
+                           (type == PrimitiveType::Triangles) || (type == PrimitiveType::TriangleStrip);
+    if (RenderTargetBatch::batchingEnabled() && mergeable && !states.shader && !fboTexture)
+    {
+        appendToBatch(vertices, vertexCount, type, states);
+        return;
+    }
+
+    // Non-batchable draws must not overtake the pending batch
+    flushBatch();
+
     if (RenderTargetImpl::isActive(m_id) || setActive(true))
     {
         // Check if the vertex count is low enough so that we can pre-transform them
@@ -442,6 +542,9 @@ void RenderTarget::draw(const VertexBuffer& vertexBuffer, std::size_t firstVerte
     if (!vertexCount || !vertexBuffer.getNativeHandle())
         return;
 
+    // Vertex buffer draws must not overtake the pending batch
+    flushBatch();
+
     if (RenderTargetImpl::isActive(m_id) || setActive(true))
     {
         setupDraw(false, states);
@@ -522,6 +625,8 @@ bool RenderTarget::setActive(bool active)
 ////////////////////////////////////////////////////////////
 void RenderTarget::pushGLStates()
 {
+    flushBatch();
+
     if (RenderTargetImpl::isActive(m_id) || setActive(true))
     {
 #ifdef SFML_DEBUG
@@ -553,6 +658,8 @@ void RenderTarget::pushGLStates()
 ////////////////////////////////////////////////////////////
 void RenderTarget::popGLStates()
 {
+    flushBatch();
+
     if (RenderTargetImpl::isActive(m_id) || setActive(true))
     {
         glCheck(glMatrixMode(GL_PROJECTION));
@@ -572,6 +679,8 @@ void RenderTarget::popGLStates()
 ////////////////////////////////////////////////////////////
 void RenderTarget::resetGLStates()
 {
+    flushBatch();
+
     // Check here to make sure a context change does not happen after activate(true)
     const bool shaderAvailable       = Shader::isAvailable();
     const bool vertexBufferAvailable = VertexBuffer::isAvailable();
@@ -895,6 +1004,7 @@ void RenderTarget::drawPrimitives(PrimitiveType type, std::size_t firstVertex, s
     const GLenum mode = modes[type];
 
     // Draw the primitives
+    RenderTargetBatch::recordDraw(vertexCount);
     glCheck(glDrawArrays(mode, static_cast<GLint>(firstVertex), static_cast<GLsizei>(vertexCount)));
 }
 
@@ -917,6 +1027,109 @@ void RenderTarget::cleanupDraw(const RenderStates& states)
 
     // Re-enable the cache at the end of the draw if it was disabled
     m_cache.enable = true;
+}
+
+
+////////////////////////////////////////////////////////////
+void RenderTarget::appendToBatch(const Vertex* vertices, std::size_t vertexCount, PrimitiveType type, const RenderStates& states)
+{
+    // States that would break the current batch require it to be drawn first.
+    // The transform is not part of the comparison: vertices are pre-transformed
+    // on the CPU, so draws with different transforms can still be merged.
+    if (!m_batch.vertices.empty() &&
+        ((type != m_batch.type) || (states.texture != m_batch.states.texture) ||
+         (states.blendMode != m_batch.states.blendMode) || (states.stencilMode != m_batch.states.stencilMode) ||
+         (states.coordinateType != m_batch.states.coordinateType)))
+    {
+        flushBatch();
+    }
+
+    // Two extra vertices are needed to stitch triangle strips together
+    const bool        stitch     = (type == PrimitiveType::TriangleStrip) && !m_batch.vertices.empty();
+    const std::size_t extraSpace = vertexCount + (stitch ? 2 : 0);
+
+    // The batch must not grow without bounds
+    if (m_batch.vertices.size() + extraSpace > RenderTargetBatch::maxBatchVertices)
+        flushBatch();
+
+    if (m_batch.vertices.empty())
+    {
+        m_batch.type   = type;
+        m_batch.states = states;
+    }
+
+    m_batch.vertices.reserve(m_batch.vertices.size() + extraSpace);
+
+    // Stitch strips together with degenerate triangles, which rasterize
+    // zero fragments and thus leave the rendered image unchanged
+    if (stitch)
+    {
+        m_batch.vertices.push_back(m_batch.vertices.back());
+
+        Vertex first = vertices[0];
+        first.position = states.transform * first.position;
+        m_batch.vertices.push_back(first);
+    }
+
+    for (std::size_t i = (stitch ? 1 : 0); i < vertexCount; ++i)
+    {
+        Vertex vertex   = vertices[i];
+        vertex.position = states.transform * vertex.position;
+        m_batch.vertices.push_back(vertex);
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+void RenderTarget::flushBatch()
+{
+    if (m_batch.vertices.empty())
+        return;
+
+    // Detach the pending batch so that a re-entrant flush (e.g. triggered by
+    // setView() from resetGLStates() during the draw setup below) is a no-op
+    std::vector<Vertex> pending;
+    pending.swap(m_batch.vertices);
+
+    const RenderStates states = m_batch.states;
+    const PrimitiveType type   = m_batch.type;
+
+    if (RenderTargetImpl::isActive(m_id) || setActive(true))
+    {
+        RenderTargetBatch::recordFlush(pending.size());
+
+        // Vertices are already pre-transformed, draw them with an identity transform
+        setupDraw(true, states);
+
+        // Check if texture coordinates array is needed, and update client state accordingly
+        const bool enableTexCoordsArray = (states.texture || states.shader);
+        if (!m_cache.enable || (enableTexCoordsArray != m_cache.texCoordsArrayEnabled))
+        {
+            if (enableTexCoordsArray)
+                glCheck(glEnableClientState(GL_TEXTURE_COORD_ARRAY));
+            else
+                glCheck(glDisableClientState(GL_TEXTURE_COORD_ARRAY));
+        }
+
+        // Point the vertex arrays at the batch buffer
+        const auto* data = reinterpret_cast<const std::byte*>(pending.data());
+        glCheck(glVertexPointer(2, GL_FLOAT, sizeof(Vertex), data + 0));
+        glCheck(glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(Vertex), data + 8));
+        if (enableTexCoordsArray)
+            glCheck(glTexCoordPointer(2, GL_FLOAT, sizeof(Vertex), data + 12));
+
+        drawPrimitives(type, 0, pending.size());
+        cleanupDraw(states);
+
+        // The batch buffer is neither the vertex cache nor a vertex buffer,
+        // so the next draw must set up its pointers again
+        m_cache.useVertexCache        = false;
+        m_cache.texCoordsArrayEnabled = enableTexCoordsArray;
+    }
+
+    // Give the buffer back to the batch so that its capacity is reused
+    pending.clear();
+    m_batch.vertices = std::move(pending);
 }
 
 } // namespace sf

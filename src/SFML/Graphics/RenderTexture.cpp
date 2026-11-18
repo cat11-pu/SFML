@@ -169,6 +169,9 @@ void RenderTexture::display()
     if (!m_impl)
         return;
 
+    // Submit any pending batched geometry before updating the target texture
+    flushBatch();
+
     if (priv::RenderTextureImplFBO::isAvailable())
     {
         // Perform a RenderTarget-only activation if we are using FBOs
